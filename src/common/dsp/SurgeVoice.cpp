@@ -129,7 +129,9 @@ float SurgeVoice::channelKeyEquivalent(float key, int channel, SurgeStorage *sto
     }
     else if (storage->oddsound_mts_active_as_client)
     {
+#ifndef SURGE_SKIP_ODDSOUND_MTS
         res += MTS_GetMapSize(storage->oddsound_mts_client) * shift;
+#endif
     }
     else if (storage->tuningApplicationMode == SurgeStorage::RETUNE_ALL)
     {

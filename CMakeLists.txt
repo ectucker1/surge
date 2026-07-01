@@ -53,6 +53,8 @@ option(SURGE_BUILD_32BIT_LINUX "Allow non-working Surge XT builds to run on 32-b
 if(${CMAKE_SIZEOF_VOID_P} EQUAL 4)
   if(WIN32)
     message(STATUS "Windows 32-bit build is lightly tested")
+  elseif(EMSCRIPTEN)
+    message(STATUS "WASM is a 32-bit target; that's fine.")
   else()
     # If you hit this error and want to try and do a 32-bit build on your Linux variant,
     # most likely you will need to conditionally #ifdef out the Spring Reverb and a few other
@@ -148,6 +150,19 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
 int main() {}" IS_X86)
   if (IS_X86)
     add_compile_options(-msse4.1 -mfpmath=sse)
+  endif()
+
+  if(EMSCRIPTEN)
+    # Emscripten implements the x86 SSE intrinsic headers on top of WASM
+    # SIMD128, so requesting SSE4.1 sends the engine down its native x86 SIMD
+    # path, vectorized as WASM SIMD. Surge also relies on C++ exceptions,
+    # which WASM needs told to handle natively.
+    add_compile_options(-msimd128 -msse4.1 -fwasm-exceptions)
+    add_link_options(-fwasm-exceptions)
+
+    # simde's hedley.h still consults the deprecated lowercase
+    # __EMSCRIPTEN_major__ macro family, which -Werror would otherwise reject
+    add_compile_options(-Wno-deprecated-pragma)
   endif()
 
   # Add AVX support

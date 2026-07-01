@@ -13,6 +13,13 @@ surge_add_lib_subdirectory(binn)
 set(EURORACK_CLOUDS_IS_CLOUDS TRUE)
 surge_add_lib_subdirectory(eurorack)
 surge_add_lib_subdirectory(pffft)
+
+if(EMSCRIPTEN)
+  # pffft only takes its SSE path when an x86 architecture macro is defined;
+  # Emscripten provides the SSE1 intrinsics on top of WASM SIMD128, so opt in
+  # through the i386 macro it checks for.
+  target_compile_definitions(pffft PRIVATE i386)
+endif()
 surge_add_lib_subdirectory(fmt)
 
 # Make MTS optional
@@ -44,6 +51,16 @@ surge_add_lib_subdirectory(sst/sst-cpputils)
 set(SST_BASIC_BLOCKS_SIMD_OMIT_NATIVE_ALIASES ON CACHE BOOL "No Native Aliases for Surge XT") # Makes ARM64EC use Neon, basically
 surge_add_lib_subdirectory(sst/sst-basic-blocks)
 surge_add_lib_subdirectory(sst/sst-plugininfra)
+
+if(EMSCRIPTEN)
+  # The Linux implementations of these don't compile under Emscripten
+  # (execinfo.h backtraces; cpuid and MXCSR access), so swap in WASM versions
+  get_target_property(SPI_SOURCES sst-plugininfra SOURCES)
+  list(REMOVE_ITEM SPI_SOURCES src/cpufeatures.cpp src/misc_linux.cpp)
+  set_target_properties(sst-plugininfra PROPERTIES SOURCES "${SPI_SOURCES}")
+  target_sources(sst-plugininfra PRIVATE
+    ${SURGE_SOURCE_DIR}/src/platform/wasm/PluginInfraWasmShims.cpp)
+endif()
 surge_add_lib_subdirectory(sst/sst-filters)
 surge_add_lib_subdirectory(sst/sst-waveshapers)
 
@@ -279,6 +296,12 @@ if(APPLE)
     "-framework CoreFoundation"
     "-framework Foundation"
   )
+elseif(EMSCRIPTEN)
+  # Emscripten registers as UNIX, but must not get that branch's
+  # -Wl,--no-undefined: a WASM side module resolves symbols against the main
+  # module at runtime, so undefined symbols at link time are expected.
+  target_compile_definitions(${PROJECT_NAME} PUBLIC LINUX=1)
+  target_link_libraries(${PROJECT_NAME} PUBLIC surge::simde)
 elseif(UNIX)
   target_compile_definitions(${PROJECT_NAME} PUBLIC LINUX=1)
 

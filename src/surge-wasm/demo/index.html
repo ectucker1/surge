@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+<!--
+  Surge XT WASM demo: hosts the surge-xt.clap.wasm side module through the
+  demo-host main module and drives it with a dependency-free UI.
+  Serve this directory over HTTP (e.g. python3 -m http.server) and open it;
+  WASM modules cannot be fetched from file:// URLs.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Surge XT WASM Demo</title>
+<style>
+  :root {
+    --bg: #16181d; --panel: #1f232b; --row: #242933; --row-alt: #20242d;
+    --text: #e6e8ec; --dim: #9aa1ad; --accent: #ff9000; --pin: #ffd866;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.4 system-ui, sans-serif;
+    display: flex; flex-direction: column; height: 100vh;
+  }
+  header {
+    display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+    padding: 10px 14px; background: var(--panel);
+  }
+  header h1 { font-size: 16px; margin: 0 8px 0 0; }
+  #status { color: var(--dim); font-size: 12px; flex: 1; min-width: 160px; }
+  button {
+    background: #2d3340; color: var(--text); border: 1px solid #3c4454;
+    border-radius: 6px; padding: 6px 12px; cursor: pointer; font-size: 13px;
+  }
+  button:hover { background: #394152; }
+  button:disabled { opacity: 0.45; cursor: default; }
+  #search {
+    width: 100%; padding: 8px 12px; font-size: 14px;
+    background: var(--row); color: var(--text);
+    border: none; border-top: 1px solid #000; outline: none;
+  }
+  #lists { flex: 1; overflow-y: auto; }
+  .section-label {
+    padding: 6px 14px; font-size: 11px; text-transform: uppercase;
+    letter-spacing: 1px; color: var(--dim); background: var(--bg);
+    position: sticky; top: 0; z-index: 1;
+  }
+  .row {
+    display: flex; align-items: center; gap: 10px; padding: 3px 14px;
+    background: var(--row);
+  }
+  .row:nth-child(even) { background: var(--row-alt); }
+  .row.hidden { display: none; }
+  .pin-btn {
+    background: none; border: none; padding: 2px 4px; font-size: 15px;
+    color: var(--dim); cursor: pointer;
+  }
+  .row.pinned .pin-btn { color: var(--pin); }
+  .meta { width: 270px; min-width: 160px; overflow: hidden; }
+  .pname { display: block; white-space: nowrap; text-overflow: ellipsis; overflow: hidden; }
+  .pmodule { display: block; font-size: 11px; color: var(--dim); }
+  .row input[type=range] { flex: 1; accent-color: var(--accent); min-width: 80px; }
+  .pval {
+    width: 130px; text-align: right; font-size: 12px; color: var(--dim);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  #keyboard {
+    display: flex; flex-wrap: wrap; gap: 4px; padding: 10px 14px;
+    background: var(--panel); border-top: 1px solid #000;
+  }
+  .note-btn { min-width: 44px; padding: 10px 6px; user-select: none; touch-action: none; }
+  .note-btn.sharp { background: #1a1d24; }
+  .note-btn.held { background: var(--accent); color: #000; }
+  #overlay {
+    position: fixed; inset: 0; background: rgba(10,12,16,0.92);
+    display: flex; flex-direction: column; gap: 14px;
+    align-items: center; justify-content: center; z-index: 10;
+  }
+  #overlay button { font-size: 18px; padding: 14px 28px; }
+  #overlay .note { color: var(--dim); max-width: 420px; text-align: center; }
+</style>
+</head>
+<body>
+
+<div id="overlay">
+  <button id="start-btn" disabled>Loading&hellip;</button>
+  <div class="note">Starts the audio engine. Audio output begins immediately;
+    play notes with the buttons at the bottom or a MIDI keyboard.</div>
+</div>
+
+<header>
+  <h1>Surge XT WASM Demo</h1>
+  <span id="status">booting&hellip;</span>
+  <button id="midi-btn">Enable MIDI</button>
+</header>
+
+<input id="search" type="search" placeholder="Search parameters (e.g. 'osc 1', 'filter cutoff', 'reverb')&hellip;" disabled>
+
+<div id="lists">
+  <div class="section-label" id="pinned-label" style="display:none">Pinned</div>
+  <div id="pinned"></div>
+  <div class="section-label">All parameters (<span id="param-count">0</span>)</div>
+  <div id="params"></div>
+</div>
+
+<div id="keyboard"></div>
+
+<script src="demo-host.js"></script>
+<script>
+'use strict';
+
+const $ = id => document.getElementById(id);
+const status = msg => { $('status').textContent = msg; };
+
+const BUFFER_FRAMES = 2048;
+const PIN_STORE_KEY = 'surge-wasm-demo-pins';
+
+let M;            // emscripten module
+let sh = {};      // cwrapped C api
+let plist = [];   // {index, id, name, module, row, slider, nameEl, valEl, searchText}
+let byId = new Map();
+let pins = new Set(JSON.parse(localStorage.getItem(PIN_STORE_KEY) || '[]'));
+
+function cwrapAll() {
+  const c = (name, ret, args) => { sh[name] = M.cwrap('sh_' + name, ret, args); };
+  c('load', 'number', ['string']);
+  c('plugin_name', 'string', []);
+  c('start', 'number', ['number', 'number']);
+  c('param_count', 'number', []);
+  c('param_id', 'number', ['number']);
+  c('param_name', 'string', ['number']);
+  c('param_module', 'string', ['number']);
+  c('param_value', 'number', ['number']);
+  c('param_text', 'string', ['number', 'number']);
+  c('set_param', null, ['number', 'number']);
+  c('note', null, ['number', 'number', 'number']);
+  c('midi', null, ['number', 'number', 'number']);
+  c('render', 'number', ['number', 'number', 'number']);
+  c('poll', 'number', []);
+}
+
+/* ---- parameter list ---- */
+
+function buildParamList() {
+  const n = sh.param_count();
+  $('param-count').textContent = n;
+  const frag = document.createDocumentFragment();
+
+  for (let i = 0; i < n; i++) {
+    const p = {
+      index: i,
+      id: sh.param_id(i),
+      name: sh.param_name(i),
+      module: sh.param_module(i),
+    };
+    p.searchText = (p.name + ' ' + p.module).toLowerCase();
+
+    const row = document.createElement('div');
+    row.className = 'row';
+
+    const pinBtn = document.createElement('button');
+    pinBtn.className = 'pin-btn';
+    pinBtn.title = 'Pin to top';
+    pinBtn.textContent = '★';
+    pinBtn.addEventListener('click', () => togglePin(p));
+
+    const meta = document.createElement('div');
+    meta.className = 'meta';
+    const nameEl = document.createElement('span');
+    nameEl.className = 'pname';
+    nameEl.textContent = p.name;
+    const modEl = document.createElement('span');
+    modEl.className = 'pmodule';
+    modEl.textContent = p.module;
+    meta.append(nameEl, modEl);
+
+    const slider = document.createElement('input');
+    slider.type = 'range';
+    slider.min = 0; slider.max = 1; slider.step = 0.001;
+    slider.value = sh.param_value(p.id);
+
+    const valEl = document.createElement('span');
+    valEl.className = 'pval';
+    valEl.textContent = sh.param_text(p.id, +slider.value);
+
+    slider.addEventListener('input', () => {
+      const v = +slider.value;
+      sh.set_param(p.id, v);
+      valEl.textContent = sh.param_text(p.id, v);
+      // Some parameters (oscillator/FX types etc.) rename their neighbors,
+      // so re-pull the list a moment after the user settles
+      scheduleRefresh();
+    });
+
+    row.append(pinBtn, meta, slider, valEl);
+    Object.assign(p, { row, slider, nameEl, modEl, valEl });
+    plist.push(p);
+    byId.set(p.id, p);
+    frag.append(row);
+  }
+  $('params').append(frag);
+
+  // restore pins from a previous visit
+  for (const id of [...pins]) {
+    const p = byId.get(id);
+    if (p) placePinned(p, true); else pins.delete(id);
+  }
+  savePins();
+}
+
+function placePinned(p, pinned) {
+  p.row.classList.toggle('pinned', pinned);
+  if (pinned) {
+    $('pinned').append(p.row);
+  } else {
+    // restore list position by index order
+    const next = plist.find(q => q.index > p.index && !pins.has(q.id));
+    $('params').insertBefore(p.row, next ? next.row : null);
+  }
+  $('pinned-label').style.display = pins.size ? '' : 'none';
+  applyFilter();
+}
+
+function togglePin(p) {
+  if (pins.has(p.id)) pins.delete(p.id); else pins.add(p.id);
+  placePinned(p, pins.has(p.id));
+  savePins();
+}
+
+function savePins() {
+  localStorage.setItem(PIN_STORE_KEY, JSON.stringify([...pins]));
+}
+
+function applyFilter() {
+  const q = $('search').value.trim().toLowerCase();
+  const terms = q.split(/\s+/).filter(t => t);
+  for (const p of plist) {
+    // pinned rows always stay visible
+    const match = pins.has(p.id) || terms.every(t => p.searchText.includes(t));
+    p.row.classList.toggle('hidden', !match);
+  }
+}
+$('search').addEventListener('input', applyFilter);
+
+/* refresh names, values and value texts from the engine */
+function refreshAll() {
+  for (const p of plist) {
+    const name = sh.param_name(p.index);
+    const module = sh.param_module(p.index);
+    if (name !== p.name || module !== p.module) {
+      p.name = name;
+      p.module = module;
+      p.searchText = (name + ' ' + module).toLowerCase();
+      p.nameEl.textContent = name;
+      p.modEl.textContent = module;
+    }
+    const v = sh.param_value(p.id);
+    if (Math.abs(v - +p.slider.value) > 1e-6 && document.activeElement !== p.slider)
+      p.slider.value = v;
+    p.valEl.textContent = sh.param_text(p.id, +p.slider.value);
+  }
+  applyFilter();
+}
+
+let refreshTimer = 0;
+function scheduleRefresh() {
+  clearTimeout(refreshTimer);
+  refreshTimer = setTimeout(refreshAll, 300);
+}
+
+/* ---- virtual keyboard ---- */
+
+const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+
+function buildKeyboard() {
+  const kb = $('keyboard');
+  for (let key = 48; key <= 72; key++) { // C3..C5
+    const name = NOTE_NAMES[key % 12] + (Math.floor(key / 12) - 1);
+    const btn = document.createElement('button');
+    btn.className = 'note-btn' + (name.includes('#') ? ' sharp' : '');
+    btn.textContent = name;
+    let held = false;
+    const down = e => {
+      e.preventDefault();
+      if (held) return;
+      held = true;
+      btn.classList.add('held');
+      sh.note(key, 100, 1);
+    };
+    const up = () => {
+      if (!held) return;
+      held = false;
+      btn.classList.remove('held');
+      sh.note(key, 0, 0);
+    };
+    btn.addEventListener('pointerdown', down);
+    btn.addEventListener('pointerup', up);
+    btn.addEventListener('pointerleave', up);
+    btn.addEventListener('pointercancel', up);
+    kb.append(btn);
+  }
+}
+
+/* ---- WebMIDI ---- */
+
+let midiInputs = [];
+$('midi-btn').addEventListener('click', async () => {
+  if (!navigator.requestMIDIAccess) {
+    status('WebMIDI is not supported in this browser');
+    return;
+  }
+  try {
+    const access = await navigator.requestMIDIAccess();
+    const attach = () => {
+      midiInputs = [...access.inputs.values()];
+      for (const input of midiInputs) {
+        input.onmidimessage = e => {
+          const d = e.data;
+          // forward channel voice messages; surge handles notes, CC,
+          // pitch bend and aftertouch
+          if (d.length >= 1 && d.length <= 3 && d[0] < 0xF0)
+            sh.midi(d[0], d[1] | 0, d[2] | 0);
+        };
+      }
+      status(midiInputs.length
+        ? 'MIDI: ' + midiInputs.map(i => i.name).join(', ')
+        : 'MIDI enabled, no inputs connected');
+    };
+    access.onstatechange = attach;
+    attach();
+    $('midi-btn').disabled = true;
+  } catch (err) {
+    status('MIDI access denied: ' + err.message);
+  }
+});
+
+/* ---- audio ---- */
+
+function startAudio() {
+  const ctx = new AudioContext();
+  if (!sh.start(ctx.sampleRate, BUFFER_FRAMES)) {
+    status('engine failed to start');
+    return;
+  }
+
+  const ptrL = M._malloc(BUFFER_FRAMES * 4);
+  const ptrR = M._malloc(BUFFER_FRAMES * 4);
+
+  // A ScriptProcessorNode keeps this demo dependency- and worker-free; a
+  // real product would render from an AudioWorklet instead
+  const node = ctx.createScriptProcessor(BUFFER_FRAMES, 0, 2);
+  node.onaudioprocess = e => {
+    sh.render(ptrL, ptrR, BUFFER_FRAMES);
+    // re-read HEAPF32 every time; memory growth replaces the buffer
+    e.outputBuffer.getChannelData(0)
+        .set(M.HEAPF32.subarray(ptrL >> 2, (ptrL >> 2) + BUFFER_FRAMES));
+    e.outputBuffer.getChannelData(1)
+        .set(M.HEAPF32.subarray(ptrR >> 2, (ptrR >> 2) + BUFFER_FRAMES));
+  };
+  node.connect(ctx.destination);
+
+  setInterval(() => { if (sh.poll()) refreshAll(); }, 250);
+
+  status(sh.plugin_name() + ' — running at ' + ctx.sampleRate + ' Hz');
+  $('overlay').remove();
+}
+
+/* ---- boot ---- */
+
+(async function main() {
+  try {
+    const [module, wasmBytes] = await Promise.all([
+      createSurgeDemo(),
+      fetch('surge-xt.clap.wasm').then(r => {
+        if (!r.ok) throw new Error('fetching surge-xt.clap.wasm: HTTP ' + r.status);
+        return r.arrayBuffer();
+      }),
+    ]);
+    M = module;
+    M.FS.writeFile('/surge-xt.clap.wasm', new Uint8Array(wasmBytes));
+    cwrapAll();
+
+    if (!sh.load('/surge-xt.clap.wasm'))
+      throw new Error('engine failed to load (see console)');
+
+    buildParamList();
+    buildKeyboard();
+    $('search').disabled = false;
+    status(sh.plugin_name() + ' loaded — ' + sh.param_count() + ' parameters');
+
+    const btn = $('start-btn');
+    btn.textContent = 'Start Audio';
+    btn.disabled = false;
+    btn.addEventListener('click', startAudio, { once: true });
+  } catch (err) {
+    status('error: ' + err.message);
+    $('start-btn').textContent = 'Failed';
+    console.error(err);
+  }
+})();
+</script>
+</body>
+</html>

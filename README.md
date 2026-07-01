@@ -1,4 +1,7 @@
-# Surge XT
+# Surge XT (WASM Fork)
+
+A fork of Surge XT designed to compile to WebAssembly and run in a browser.
+This is currently entirely vibecoded (one-shot by Claude Fable); use with discretion.
 
 **If you are a musician looking to use Surge XT, please download the appropriate binary
 [from our website](https://surge-synthesizer.github.io). Surge Synth Team makes regular releases for all supported

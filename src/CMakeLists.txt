@@ -14,6 +14,33 @@ option(SURGE_BUILD_LV2 "Build Surge XT as an LV2" OFF)
 
 option(SURGE_BUILD_CLAP "Build Surge XT as a CLAP" ON)
 
+option(SURGE_BUILD_WASM "Build Surge XT as a WebAssembly side module exposing the CLAP C API" ${EMSCRIPTEN})
+
+if(SURGE_BUILD_WASM)
+  if(NOT EMSCRIPTEN)
+    message(FATAL_ERROR "SURGE_BUILD_WASM requires the Emscripten toolchain. "
+      "Configure with 'emcmake cmake' and re-run!")
+  endif()
+
+  message(STATUS "Building Surge XT as a WASM side module: skipping JUCE (GUI and plugin "
+    "wrappers), Lua, and MTS-ESP.")
+
+  # The WASM module is engine-only; JUCE does not target Emscripten, so the
+  # GUI and the JUCE-based plugin wrappers all go away. The CLAP C API is
+  # provided by the native wrapper in src/surge-wasm instead.
+  set(SURGE_SKIP_JUCE_FOR_RACK TRUE)
+  set(SURGE_BUILD_XT OFF)
+  set(SURGE_BUILD_FX OFF)
+  set(SURGE_BUILD_CLAP OFF)
+  set(SURGE_SKIP_STANDALONE TRUE)
+
+  # LuaJIT cannot target WASM, and an interpreter would be a big binary anyway
+  set(SURGE_SKIP_LUA TRUE)
+
+  # MTS-ESP requires IPC with a scale master, which a WASM sandbox doesn't have
+  set(SURGE_SKIP_ODDSOUND_MTS TRUE)
+endif()
+
 if(NOT SURGE_COMPILE_BLOCK_SIZE)
   set(SURGE_COMPILE_BLOCK_SIZE 32)
 endif()
@@ -174,6 +201,10 @@ endif()
 
 if(SURGE_BUILD_PYTHON_BINDINGS)
   add_subdirectory(surge-python)
+endif()
+
+if(SURGE_BUILD_WASM)
+  add_subdirectory(surge-wasm)
 endif()
 
 # psa: this builds last (logic inside).

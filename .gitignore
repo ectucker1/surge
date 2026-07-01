@@ -88,6 +88,8 @@ build-arm/
 build_lv2
 buildiwyu/
 buildpy/
+build-wasm/
+build-native-check/
 cmake-build-*/
 bwd/
 CMakeUserPresets.json
