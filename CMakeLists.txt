@@ -47,13 +47,23 @@ endif()
 
 # }}}
 
+# WebAssembly can be targeted by two toolchains: Emscripten, and plain clang
+# with a wasi sysroot (cmake/wasm-clang-toolchain.cmake). Most of the
+# accommodations are the same for both, so key them on this rather than on
+# EMSCRIPTEN; the few places that differ check EMSCRIPTEN directly.
+if(EMSCRIPTEN OR CMAKE_SYSTEM_NAME STREQUAL "WASI")
+  set(SURGE_TARGET_WASM TRUE)
+else()
+  set(SURGE_TARGET_WASM FALSE)
+endif()
+
 # Fail on 32 bit except on windows {{{
 option(SURGE_BUILD_32BIT_LINUX "Allow non-working Surge XT builds to run on 32-bit Linux" OFF)
 
 if(${CMAKE_SIZEOF_VOID_P} EQUAL 4)
   if(WIN32)
     message(STATUS "Windows 32-bit build is lightly tested")
-  elseif(EMSCRIPTEN)
+  elseif(SURGE_TARGET_WASM)
     message(STATUS "WASM is a 32-bit target; that's fine.")
   else()
     # If you hit this error and want to try and do a 32-bit build on your Linux variant,
@@ -163,6 +173,32 @@ int main() {}" IS_X86)
     # simde's hedley.h still consults the deprecated lowercase
     # __EMSCRIPTEN_major__ macro family, which -Werror would otherwise reject
     add_compile_options(-Wno-deprecated-pragma)
+
+    # Build against a shared (SharedArrayBuffer-backed) memory.
+    #
+    # A wasm module's memory import must match the memory it is linked against
+    # exactly, shared flag included, so this is not just about whether the
+    # engine itself uses threads: a host whose memory is shared -- which any
+    # host driving an AudioWorklet off a SharedArrayBuffer will have -- can
+    # only load a module that asks for a shared memory.
+    #
+    # These have to be set globally rather than on the module target, because
+    # atomics and bulk-memory change code generation for every translation
+    # unit, and surge-common and the vendored static libraries all have to
+    # agree with the final link.
+    add_compile_options(-pthread)
+    add_link_options(-pthread -sSHARED_MEMORY=1)
+  elseif(SURGE_TARGET_WASM)
+    # Plain clang has no SSE headers for wasm, so the engine takes the simde
+    # path instead, which lowers the SSE intrinsics onto WASM SIMD128 when the
+    # feature is enabled. Exceptions and threads are configured by the
+    # toolchain file, since they have to match how the runtimes were built.
+    add_compile_options(-msimd128)
+
+    # simde assumes any non-x86 clang has a usable _Float16, which clang for
+    # wasm does not ("_Float16 is not supported on this target"). simde
+    # special-cases Emscripten out of that assumption; do the same here.
+    add_compile_definitions(SIMDE_FLOAT16_API=SIMDE_FLOAT16_API_PORTABLE)
   endif()
 
   # Add AVX support

@@ -217,7 +217,7 @@ SurgeStorage::SurgeStorage(const SurgeStorage::SurgeStorageConfig &config) : oth
     // These are how I test a broken windows install for documents
     // userDataPath = fs::path{"/good/luck/bozo"};
     // userDataPath = fs::path{"/usr/sbin"};
-#elif defined(__EMSCRIPTEN__)
+#elif defined(__EMSCRIPTEN__) || defined(__wasi__)
     // Running as a WASM module there is no install location to probe, and
     // dladdr() cannot name the side module. Content, if any, comes from the
     // supplied data path or a well-known spot in the virtual filesystem.

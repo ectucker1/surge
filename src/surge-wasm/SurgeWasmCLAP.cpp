@@ -98,12 +98,25 @@ struct SurgeWasmPlugin : public PluginBase, public SurgeSynthesizer::PluginLayer
     std::vector<std::pair<clap_id, double>> pendingHostNotifications;
     std::mutex pendingHostNotificationMutex;
 
-    SurgeWasmPlugin(const clap_host *host) : PluginBase(&descriptor, host)
+    static SurgeStorage::SurgeStorageConfig storageConfig()
     {
         // The sentinel suppresses the factory/user content scan; in the WASM
-        // build no content is bundled and patches arrive via the state API
-        synth = std::make_unique<SurgeSynthesizer>(
-            this, SurgeStorage::skipPatchLoadDataPathSentinel);
+        // build no content is bundled and patches arrive via the state API.
+        auto config = SurgeStorage::SurgeStorageConfig::fromDataPath(
+            SurgeStorage::skipPatchLoadDataPathSentinel);
+
+        // Nor is there a user data directory to create: this is a headless
+        // engine driven over the CLAP API, and the host may well have no
+        // filesystem behind it at all (a wasi module without a preopened
+        // directory cannot create anything). Leaving it uncreated turns user
+        // preset and MIDI mapping persistence into no-ops.
+        config.createUserDirectory = false;
+        return config;
+    }
+
+    SurgeWasmPlugin(const clap_host *host) : PluginBase(&descriptor, host)
+    {
+        synth = std::make_unique<SurgeSynthesizer>(this, storageConfig());
         synth->time_data.ppqPos = 0;
         synth->time_data.tempo = 120;
 

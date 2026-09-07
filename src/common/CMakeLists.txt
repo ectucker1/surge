@@ -19,6 +19,13 @@ if(EMSCRIPTEN)
   # Emscripten provides the SSE1 intrinsics on top of WASM SIMD128, so opt in
   # through the i386 macro it checks for.
   target_compile_definitions(pffft PRIVATE i386)
+elseif(SURGE_TARGET_WASM)
+  # Same idea without Emscripten's headers: the <xmmintrin.h> pffft includes is
+  # a small wrapper over simde's SSE1, which lowers onto WASM SIMD128.
+  target_compile_definitions(pffft PRIVATE i386)
+  target_include_directories(pffft PRIVATE
+    ${SURGE_SOURCE_DIR}/src/platform/wasm/include-simde-x86)
+  target_link_libraries(pffft PRIVATE surge::simde)
 endif()
 surge_add_lib_subdirectory(fmt)
 
@@ -33,6 +40,12 @@ endif()
 
 surge_add_lib_subdirectory(tuning-library)
 surge_add_lib_subdirectory(sqlite-3.23.3)
+if(SURGE_TARGET_WASM AND NOT EMSCRIPTEN)
+  # wasi-libc lacks the record locking and ownership calls sqlite's unix VFS
+  # is written against; see the header for what it fills in.
+  target_compile_options(sqlite PRIVATE
+    -include ${SURGE_SOURCE_DIR}/src/platform/wasm/sqlite-wasi-compat.h)
+endif()
 
 set(ZSTD_BUILD_STATIC ON)
 set(ZSTD_BUILD_SHARED OFF)
@@ -52,14 +65,21 @@ set(SST_BASIC_BLOCKS_SIMD_OMIT_NATIVE_ALIASES ON CACHE BOOL "No Native Aliases f
 surge_add_lib_subdirectory(sst/sst-basic-blocks)
 surge_add_lib_subdirectory(sst/sst-plugininfra)
 
-if(EMSCRIPTEN)
-  # The Linux implementations of these don't compile under Emscripten
+if(SURGE_TARGET_WASM)
+  # The Linux implementations of these don't compile for WASM
   # (execinfo.h backtraces; cpuid and MXCSR access), so swap in WASM versions
   get_target_property(SPI_SOURCES sst-plugininfra SOURCES)
   list(REMOVE_ITEM SPI_SOURCES src/cpufeatures.cpp src/misc_linux.cpp)
-  set_target_properties(sst-plugininfra PROPERTIES SOURCES "${SPI_SOURCES}")
-  target_sources(sst-plugininfra PRIVATE
+  if(NOT EMSCRIPTEN)
+    # Emscripten emulates dladdr() and a home directory, so the Linux path
+    # lookups work there; wasi has neither, so those go too.
+    list(REMOVE_ITEM SPI_SOURCES src/paths_linux.cpp)
+    list(APPEND SPI_SOURCES
+      ${SURGE_SOURCE_DIR}/src/platform/wasm/PluginInfraWasmPaths.cpp)
+  endif()
+  list(APPEND SPI_SOURCES
     ${SURGE_SOURCE_DIR}/src/platform/wasm/PluginInfraWasmShims.cpp)
+  set_target_properties(sst-plugininfra PROPERTIES SOURCES "${SPI_SOURCES}")
 endif()
 surge_add_lib_subdirectory(sst/sst-filters)
 surge_add_lib_subdirectory(sst/sst-waveshapers)
@@ -296,10 +316,10 @@ if(APPLE)
     "-framework CoreFoundation"
     "-framework Foundation"
   )
-elseif(EMSCRIPTEN)
-  # Emscripten registers as UNIX, but must not get that branch's
-  # -Wl,--no-undefined: a WASM side module resolves symbols against the main
-  # module at runtime, so undefined symbols at link time are expected.
+elseif(SURGE_TARGET_WASM)
+  # Both WASM toolchains register as UNIX, but must not get that branch's
+  # -Wl,--no-undefined: a WASM side module resolves some symbols against its
+  # host at load time, so undefined symbols at link time are expected.
   target_compile_definitions(${PROJECT_NAME} PUBLIC LINUX=1)
   target_link_libraries(${PROJECT_NAME} PUBLIC surge::simde)
 elseif(UNIX)

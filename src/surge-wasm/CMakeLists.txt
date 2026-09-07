@@ -39,13 +39,29 @@ set_target_properties(${PROJECT_NAME} PROPERTIES
   LIBRARY_OUTPUT_DIRECTORY ${SURGE_PRODUCT_DIR}
 )
 
-target_link_options(${PROJECT_NAME} PRIVATE
-  # A side module: relocatable, linked into a host-provided main module at
-  # runtime. =2 applies dead code elimination, keeping only the symbols
-  # below (and their dependencies) rather than everything visible.
-  -sSIDE_MODULE=2
-  -sEXPORTED_FUNCTIONS=_clap_entry
-)
+if(EMSCRIPTEN)
+  target_link_options(${PROJECT_NAME} PRIVATE
+    # A side module: relocatable, linked into a host-provided main module at
+    # runtime. =2 applies dead code elimination, keeping only the symbols
+    # below (and their dependencies) rather than everything visible.
+    #
+    # This cannot become a main module to pick up libc and libc++: a main module
+    # owns the address space, placing its data at fixed low addresses and
+    # expecting to be the program. A side module instead has its data placed at
+    # a __memory_base the loader chooses, which is the only arrangement that
+    # lets the engine share an address space with a host that already exists.
+    # The trade is that Emscripten links no system libraries into a side module
+    # and offers no way to ask it to, so the main module has to supply them.
+    # See doc/Building for WebAssembly.md.
+    -sSIDE_MODULE=2
+    -sEXPORTED_FUNCTIONS=_clap_entry
+  )
+else()
+  # The clang/wasi toolchain file sets the equivalent (-shared, --no-entry,
+  # --export=clap_entry) for every shared library it builds, and links the
+  # runtimes in statically, so the module stands alone. Nothing to add here.
+  return()
+endif()
 
 # A small browser demo hosting the side module: a main module with a flat C
 # API plus a dependency-free HTML page. Serve the wasm-demo output directory

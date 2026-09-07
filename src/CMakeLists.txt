@@ -14,12 +14,13 @@ option(SURGE_BUILD_LV2 "Build Surge XT as an LV2" OFF)
 
 option(SURGE_BUILD_CLAP "Build Surge XT as a CLAP" ON)
 
-option(SURGE_BUILD_WASM "Build Surge XT as a WebAssembly side module exposing the CLAP C API" ${EMSCRIPTEN})
+option(SURGE_BUILD_WASM "Build Surge XT as a WebAssembly side module exposing the CLAP C API" ${SURGE_TARGET_WASM})
 
 if(SURGE_BUILD_WASM)
-  if(NOT EMSCRIPTEN)
-    message(FATAL_ERROR "SURGE_BUILD_WASM requires the Emscripten toolchain. "
-      "Configure with 'emcmake cmake' and re-run!")
+  if(NOT SURGE_TARGET_WASM)
+    message(FATAL_ERROR "SURGE_BUILD_WASM requires a WebAssembly toolchain. "
+      "Configure with 'emcmake cmake', or with "
+      "-DCMAKE_TOOLCHAIN_FILE=cmake/wasm-clang-toolchain.cmake, and re-run!")
   endif()
 
   message(STATUS "Building Surge XT as a WASM side module: skipping JUCE (GUI and plugin "

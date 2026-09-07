@@ -90,6 +90,7 @@ buildiwyu/
 buildpy/
 build-wasm/
 build-native-check/
+build-wasm-clang/
 cmake-build-*/
 bwd/
 CMakeUserPresets.json
